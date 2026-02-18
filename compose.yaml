@@ -1,0 +1,237 @@
+version: "3.9"
+
+services:
+
+  traefik:
+    image: traefik:latest
+    container_name: traefik
+    restart: unless-stopped
+    command:
+      - --api.insecure=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.file.directory=/etc/traefik/dynamic/redirects
+      - --providers.file.watch=true
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entryPoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.mytlschallenge.acme.tlschallenge=true
+      - --certificatesresolvers.mytlschallenge.acme.email=${SSL_EMAIL}
+      - --certificatesresolvers.mytlschallenge.acme.storage=/letsencrypt/acme.json
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - traefik_data:/letsencrypt
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  postgres:
+    container_name: ${POSTGRES_HOSTNAME}
+    # postgres:latest is 17.6-1.pgdg13+1
+    #image: postgres:latest
+    # Use pgvector image for vector search support
+    # pg17-trixie isuses the same version as 17.6-1.pgdg13+1
+    image: pgvector/pgvector:pg17-trixie
+    restart: always
+    user: postgres
+    environment:
+      POSTGRES_DATABASES: ${POSTGRES_DATABASES}
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGDATA: /var/lib/postgresql/data
+      POSTGRES_INITDB_ARGS: '--data-checksums'
+    volumes:
+      - ./postgres-init.sh:/docker-entrypoint-initdb.d/postgres-init.sh
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready", "-d", "n8n", "-U", "postgres"]
+      interval: 30s
+      timeout: 60s
+      retries: 5
+
+  mariadb:
+    # MySQL image
+    #container_name: mysql
+    #image: mysql:8
+    #command: '--character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci'
+    # Mariadb image
+    container_name: mariadb
+    image: mariadb:10.6.4-focal
+    command: '--default-authentication-plugin=mysql_native_password'
+    restart: always
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+
+  redis:
+    image: redis:7
+    container_name: redis
+    command: redis-server /usr/local/etc/redis/redis.conf
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${REDIS_PORT}:6379"
+    volumes:
+      - ./redis.conf:/usr/local/etc/redis/redis.conf
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', '--raw', 'incr', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  n8n:
+    container_name: n8n
+    image: docker.n8n.io/n8nio/n8n:stable
+    restart: always
+    ports:
+      - "127.0.0.1:5678:5678"
+    labels:
+      - traefik.enable=true
+      # Headers middleware
+      - traefik.http.middlewares.n8n-secure-headers.headers.frameDeny=false
+      - traefik.http.middlewares.n8n-secure-headers.headers.referrerPolicy=strict-origin-when-cross-origin
+      - traefik.http.middlewares.n8n-secure-headers.headers.permissionsPolicy=geolocation=(), microphone=(), camera=()
+      - traefik.http.middlewares.n8n-secure-headers.headers.STSSeconds=315360000
+      - traefik.http.middlewares.n8n-secure-headers.headers.browserXSSFilter=true
+      - traefik.http.middlewares.n8n-secure-headers.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.n8n-secure-headers.headers.forceSTSHeader=true
+      - traefik.http.middlewares.n8n-secure-headers.headers.SSLHost=${DOMAIN_NAME}
+      - traefik.http.middlewares.n8n-secure-headers.headers.STSIncludeSubdomains=true
+      - traefik.http.middlewares.n8n-secure-headers.headers.STSPreload=true
+      # (Optional) relaxed CSP, safe for n8n UI
+      #- "traefik.http.middlewares.n8n-secure-headers.headers.contentSecurityPolicy=default-src 'self'; object-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
+      # n8n router
+      - traefik.http.routers.n8n.rule=Host(`${N8N_SUBDOMAIN}.${DOMAIN_NAME}`)
+      - traefik.http.routers.n8n.tls=true
+      - traefik.http.routers.n8n.entrypoints=websecure
+      - traefik.http.routers.n8n.tls.certresolver=mytlschallenge
+      # Apply headers middleware to n8n router
+      - traefik.http.routers.n8n.middlewares=n8n-secure-headers@docker
+    environment:
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+      - N8N_HOST=${N8N_SUBDOMAIN}.${DOMAIN_NAME}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=https
+      - N8N_RUNNERS_ENABLED=true
+      - NODE_ENV=production
+      - WEBHOOK_URL=https://${N8N_SUBDOMAIN}.${DOMAIN_NAME}/
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE}
+      - TZ=${GENERIC_TIMEZONE}
+      - DB_TYPE=${N8N_DATABASE_TYPE}
+      - DB_POSTGRESDB_HOST=${POSTGRES_HOSTNAME}
+      - DB_POSTGRESDB_PORT=${POSTGRES_PORT}
+      - DB_POSTGRESDB_DATABASE=${N8N_POSTGRESDB_DATABASE}
+      - DB_POSTGRESDB_SCHEMA=${N8N_POSTGRESDB_SCHEMA}
+      - DB_POSTGRESDB_USER=${N8N_POSTGRESDB_USER}
+      - DB_POSTGRESDB_PASSWORD=${N8N_POSTGRESDB_PASSWORD}
+      - NODE_FUNCTION_ALLOW_BUILTIN=url,fs,path,crypto,os,querystring,stream
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - n8n_files:/files
+    depends_on:
+      postgres:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  open-webui:
+    container_name: open-webui
+    image: ghcr.io/open-webui/open-webui:main
+    restart: unless-stopped
+    environment:
+      - WEBUI_SECRET_KEY=${OPENWEBUI_SECRET}
+    ports:
+      - "127.0.0.1:${OPENWEBUI_PORT}:8080"
+    volumes:
+      - openwebui_data:/app/backend/data
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.open-webui.rule=Host(`${AI_SUBDOMAIN}.${DOMAIN_NAME}`)
+      - traefik.http.routers.open-webui.tls=true
+      - traefik.http.routers.open-webui.entrypoints=web,websecure
+      - traefik.http.routers.open-webui.tls.certresolver=mytlschallenge
+      - traefik.http.middlewares.open-webui.headers.SSLRedirect=true
+      - traefik.http.middlewares.open-webui.headers.STSSeconds=315360000
+      - traefik.http.middlewares.open-webui.headers.browserXSSFilter=true
+      - traefik.http.middlewares.open-webui.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.open-webui.headers.forceSTSHeader=true
+      - traefik.http.middlewares.open-webui.headers.SSLHost=${DOMAIN_NAME}
+      - traefik.http.middlewares.open-webui.headers.STSIncludeSubdomains=true
+      - traefik.http.middlewares.open-webui.headers.STSPreload=true
+      - traefik.http.routers.open-webui.middlewares=open-webui@docker
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  affine:
+    image: ghcr.io/toeverything/affine:${AFFINE_REVISION:-stable}
+    container_name: affine
+    env_file:
+      - ./affine/.env
+    environment:
+      - DATABASE_URL=postgresql://${AFFINE_POSTGRESDB_USER}:${AFFINE_POSTGRESDB_PASSWORD}@${POSTGRES_HOSTNAME}:${POSTGRES_PORT}/${AFFINE_POSTGRESDB_DATABASE:-affine}
+      - AFFINE_INDEXER_ENABLED=false
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      affine_migration:
+        condition: service_completed_successfully
+    volumes:
+      - affine_data:/root/.affine
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.affine.rule=Host(`${AFFINE_SUBDOMAIN}.${DOMAIN_NAME}`)
+      - traefik.http.routers.affine.tls=true
+      - traefik.http.routers.affine.entrypoints=web,websecure
+      - traefik.http.routers.affine.tls.certresolver=mytlschallenge
+      - traefik.http.middlewares.affine.headers.SSLRedirect=true
+      - traefik.http.middlewares.affine.headers.STSSeconds=315360000
+      - traefik.http.middlewares.affine.headers.browserXSSFilter=true
+      - traefik.http.middlewares.affine.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.affine.headers.forceSTSHeader=true
+      - traefik.http.middlewares.affine.headers.SSLHost=${DOMAIN_NAME}
+      - traefik.http.middlewares.affine.headers.STSIncludeSubdomains=true
+      - traefik.http.middlewares.affine.headers.STSPreload=true
+      - traefik.http.routers.affine.middlewares=affine@docker
+      - traefik.http.services.affine.loadbalancer.server.port=${AFFINE_PORT:-3010}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  affine_migration:
+    image: ghcr.io/toeverything/affine:${AFFINE_REVISION:-stable}
+    container_name: affine_migration_job
+    volumes:
+      # custom configurations
+      - affine_data:/root/.affine
+    command: ['sh', '-c', 'node ./scripts/self-host-predeploy.js']
+    env_file:
+      - ./affine/.env
+    environment:
+      - DATABASE_URL=postgresql://${AFFINE_POSTGRESDB_USER}:${AFFINE_POSTGRESDB_PASSWORD}@${POSTGRES_HOSTNAME}:${POSTGRES_PORT}/${AFFINE_POSTGRESDB_DATABASE:-affine}
+      - AFFINE_INDEXER_ENABLED=false
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  postgres_data:
+  mariadb_data:
+  redis_data:
+  traefik_data:
+  n8n_data:
+  openwebui_data:
+  affine_data:

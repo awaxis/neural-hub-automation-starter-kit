@@ -1,0 +1,36 @@
+{
+  "name": "AFFiNE \u2192 Discord Notify",
+  "nodes": [
+    {
+      "id": "1",
+      "name": "Webhook",
+      "type": "webhook"
+    },
+    {
+      "id": "2",
+      "name": "Format Message",
+      "type": "function"
+    },
+    {
+      "id": "3",
+      "name": "Discord Notify",
+      "type": "discord"
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          "Format Message"
+        ]
+      ]
+    },
+    "Format Message": {
+      "main": [
+        [
+          "Discord Notify"
+        ]
+      ]
+    }
+  }
+}

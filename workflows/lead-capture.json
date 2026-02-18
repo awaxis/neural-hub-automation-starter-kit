@@ -1,0 +1,36 @@
+{
+  "name": "Webhook Lead Capture",
+  "nodes": [
+    {
+      "id": "1",
+      "name": "Webhook",
+      "type": "webhook"
+    },
+    {
+      "id": "2",
+      "name": "Postgres Store",
+      "type": "postgres"
+    },
+    {
+      "id": "3",
+      "name": "Send Email",
+      "type": "email"
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          "Postgres Store"
+        ]
+      ]
+    },
+    "Postgres Store": {
+      "main": [
+        [
+          "Send Email"
+        ]
+      ]
+    }
+  }
+}

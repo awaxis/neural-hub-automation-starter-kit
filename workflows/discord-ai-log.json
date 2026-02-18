@@ -1,0 +1,36 @@
+{
+  "name": "Discord \u2192 AI \u2192 Database Log",
+  "nodes": [
+    {
+      "id": "1",
+      "name": "Discord Trigger",
+      "type": "discordTrigger"
+    },
+    {
+      "id": "2",
+      "name": "AI Summarize",
+      "type": "openai"
+    },
+    {
+      "id": "3",
+      "name": "Postgres Insert",
+      "type": "postgres"
+    }
+  ],
+  "connections": {
+    "Discord Trigger": {
+      "main": [
+        [
+          "AI Summarize"
+        ]
+      ]
+    },
+    "AI Summarize": {
+      "main": [
+        [
+          "Postgres Insert"
+        ]
+      ]
+    }
+  }
+}
