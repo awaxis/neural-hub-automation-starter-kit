@@ -115,7 +115,7 @@ CREATE TABLE community_insights (
 -   Never commit `.env`
 -   Enable authentication on n8n
 -   Use firewall rules on VPS
--   Backup Docker volumes regularly
+-   Backup Docker volumes regularly [see server-backup-to-google-drive](server-backup-to-google-drive.md)
 
 ------------------------------------------------------------------------
 
